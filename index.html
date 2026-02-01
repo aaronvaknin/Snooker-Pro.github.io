@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0c">
+    <title>Snooker Pro v1.0.4</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --app-bg: #0a0a0c;
+            --accent: #10b981;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--app-bg);
+            color: white;
+            margin: 0;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+        }
+        #root {
+            width: 100%;
+            height: 100%;
+            max-width: 600px;
+            position: relative;
+        }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .page-enter { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .ball-glow {
+            position: relative;
+            box-shadow: inset -4px -4px 8px rgba(0,0,0,0.5), 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .ball-glow::after {
+            content: '';
+            position: absolute;
+            top: 15%; left: 20%; width: 25%; height: 15%;
+            background: rgba(255,255,255,0.25);
+            border-radius: 50%;
+        }
+
+        @media (max-height: 700px) {
+            .score-text { font-size: 7rem !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const [svg, setSvg] = useState("");
+            useEffect(() => {
+                if (window.lucide) {
+                    const icon = window.lucide.icons[name];
+                    if (icon) {
+                        const svgString = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="${className}">${icon.map(i => `<${i[0]} ${Object.entries(i[1]).map(([k,v]) => `${k}="${v}"`).join(' ')} />`).join('')}</svg>`;
+                        setSvg(svgString);
+                    }
+                }
+            }, [name, size, className]);
+            return <span dangerouslySetInnerHTML={{ __html: svg }} className="inline-flex" />;
+        };
+
+        const BALLS = [
+            { id: 'red', color: 'bg-[#ff3b30]', pts: 1 },
+            { id: 'yellow', color: 'bg-[#ffcc00]', pts: 2 },
+            { id: 'green', color: 'bg-[#34c759]', pts: 3 },
+            { id: 'brown', color: 'bg-[#a25622]', pts: 4 },
+            { id: 'blue', color: 'bg-[#007aff]', pts: 5 },
+            { id: 'pink', color: 'bg-[#ff2d55]', pts: 6 },
+            { id: 'black', color: 'bg-[#1a1a1a]', pts: 7 },
+        ];
+
+        const CURRENCY = "₪";
+
+        function App() {
+            const [screen, setScreen] = useState('home');
+            const [players, setPlayers] = useState([]);
+            const [selectedPlayers, setSelectedPlayers] = useState([]);
+            const [pointValue, setPointValue] = useState(1);
+            const [currentGame, setCurrentGame] = useState(null);
+            const [history, setHistory] = useState([]);
+            const [grossDebtBook, setGrossDebtBook] = useState({});
+            const [currentBreak, setCurrentBreak] = useState(0);
+            const [isMinusMode, setIsMinusMode] = useState(false);
+            const [showLiveDebts, setShowLiveDebts] = useState(false);
+
+            // Persistent Storage
+            useEffect(() => {
+                const p = localStorage.getItem('sn_players_v104');
+                const h = localStorage.getItem('sn_history_v104');
+                if (p) setPlayers(JSON.parse(p));
+                if (h) setHistory(JSON.parse(h));
+            }, []);
+
+            useEffect(() => localStorage.setItem('sn_players_v104', JSON.stringify(players)), [players]);
+            useEffect(() => localStorage.setItem('sn_history_v104', JSON.stringify(history)), [history]);
+
+            const getUpdatedDebts = (currentBook) => {
+                const newBook = { ...currentBook };
+                if (!currentGame) return newBook;
+                
+                const playersList = currentGame.players;
+                playersList.forEach((p, i) => {
+                    const prev = playersList[(i - 1 + playersList.length) % playersList.length];
+                    if (p.score > 0) {
+                        const key = `${prev.id}_${p.id}`;
+                        newBook[key] = (newBook[key] || 0) + (p.score * pointValue);
+                    } else if (p.score < 0) {
+                        const key = `${p.id}_${prev.id}`;
+                        newBook[key] = (newBook[key] || 0) + (Math.abs(p.score) * pointValue);
+                    }
+                });
+                return newBook;
+            };
+
+            const getNetDisplay = (book) => {
+                const net = {};
+                Object.entries(book).forEach(([key, val]) => {
+                    const [from, to] = key.split('_');
+                    const pair = from < to ? `${from}_${to}` : `${to}_${from}`;
+                    net[pair] = (net[pair] || 0) + (from < to ? -val : val);
+                });
+                return Object.entries(net)
+                    .filter(([_, bal]) => bal !== 0)
+                    .map(([pair, bal]) => {
+                        const [idA, idB] = pair.split('_');
+                        const payer = bal < 0 ? idA : idB;
+                        const receiver = bal < 0 ? idB : idA;
+                        const pName = players.find(x => x.id === payer)?.name || selectedPlayers.find(x => x.id === payer)?.name || "שחקן";
+                        const rName = players.find(x => x.id === receiver)?.name || selectedPlayers.find(x => x.id === receiver)?.name || "שחקן";
+                        return { from: pName, to: rName, amount: Math.abs(bal) };
+                    });
+            };
+
+            const handleScore = (pts, isFoul = false) => {
+                let val = isMinusMode ? -pts : pts;
+                if (isFoul) val = -4;
+                
+                setCurrentGame(prev => {
+                    const nextPlayers = [...prev.players];
+                    nextPlayers[prev.activeIdx].score += val;
+                    return { 
+                        ...prev, 
+                        players: nextPlayers, 
+                        logs: [...prev.logs, { idx: prev.activeIdx, pts: val, prevBreak: currentBreak }] 
+                    };
+                });
+                
+                if (!isMinusMode && !isFoul) setCurrentBreak(c => c + pts);
+                else setCurrentBreak(0);
+                setIsMinusMode(false);
+            };
+
+            const undoAction = () => {
+                if (!currentGame.logs.length) return;
+                const last = currentGame.logs[currentGame.logs.length - 1];
+                setCurrentGame(prev => {
+                    const next = [...prev.players];
+                    next[last.idx].score -= last.pts;
+                    return { ...prev, players: next, logs: prev.logs.slice(0, -1) };
+                });
+                setCurrentBreak(last.prevBreak);
+            };
+
+            return (
+                <div className="flex flex-col h-full w-full bg-[#0a0a0c] relative overflow-hidden">
+                    
+                    {/* Home Screen */}
+                    {screen === 'home' && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-8 page-enter">
+                            <h1 className="text-7xl font-black italic tracking-tighter leading-none text-center mb-10">SNOOKER<br/><span className="text-emerald-500">PRO</span></h1>
+                            <div className="w-full max-w-sm space-y-4 px-4">
+                                <button onClick={() => setScreen('setup')} className="w-full py-5 bg-emerald-500 text-black rounded-2xl font-black text-xl shadow-lg active:scale-95 transition-transform">משחק חדש</button>
+                                <button onClick={() => setScreen('history')} className="w-full py-4 bg-white/5 border border-white/10 rounded-2xl font-bold text-zinc-400 flex items-center justify-center gap-2 active:scale-95 transition-all"><Icon name="History" size={18}/> היסטוריה</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Setup Screen / Change Players Screen */}
+                    {(screen === 'setup' || screen === 'modify_players') && (
+                        <div className="flex-1 flex flex-col page-enter pt-12">
+                            <div className="flex justify-between items-center px-6 mb-6">
+                                <button onClick={() => setScreen(screen === 'setup' ? 'home' : 'interim')} className="p-2 text-zinc-500"><Icon name="ChevronLeft" size={28}/></button>
+                                <h2 className="text-lg font-black italic text-emerald-500 uppercase tracking-widest">{screen === 'setup' ? 'Setup' : 'Modify Players'}</h2>
+                                <div className="w-10"></div>
+                            </div>
+                            
+                            <div className="flex-1 overflow-y-auto no-scrollbar px-6 space-y-6 pb-28">
+                                <div className="bg-zinc-900/40 p-5 rounded-3xl border border-white/5">
+                                    <label className="text-[10px] font-black uppercase text-zinc-500 mb-4 block tracking-widest text-right">ערך נקודה ({CURRENCY})</label>
+                                    <div className="flex items-center justify-center gap-8">
+                                        <button onClick={() => setPointValue(Math.max(1, pointValue - 1))} className="w-12 h-12 flex items-center justify-center bg-white/5 rounded-xl text-emerald-500"><Icon name="Minus"/></button>
+                                        <span className="text-5xl font-black italic tabular-nums">{pointValue}</span>
+                                        <button onClick={() => setPointValue(pointValue + 1)} className="w-12 h-12 flex items-center justify-center bg-white/5 rounded-xl text-emerald-500"><Icon name="Plus"/></button>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <label className="text-[10px] font-black uppercase text-emerald-500 tracking-widest text-right block">שחקנים פעילים</label>
+                                    <div className="flex gap-2">
+                                        <input id="pname" type="text" placeholder="שם שחקן..." className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 font-bold text-right outline-none focus:border-emerald-500 text-sm" onKeyPress={(e) => e.key === 'Enter' && document.getElementById('addBtn').click()} />
+                                        <button id="addBtn" onClick={() => {
+                                            const el = document.getElementById('pname');
+                                            if (el.value.trim()) { setPlayers([...players, { id: Date.now().toString(), name: el.value.trim() }]); el.value = ''; }
+                                        }} className="bg-emerald-500 text-black px-5 rounded-xl font-black"><Icon name="Plus"/></button>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {players.map(p => {
+                                            const sel = selectedPlayers.find(s => s.id === p.id);
+                                            return (
+                                                <div key={p.id} className="flex gap-2">
+                                                    <button onClick={() => sel ? setSelectedPlayers(selectedPlayers.filter(x => x.id !== p.id)) : setSelectedPlayers([...selectedPlayers, p])} className={`flex-1 p-4 rounded-2xl border flex justify-between items-center transition-all ${sel ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 shadow-md' : 'bg-white/5 border-transparent text-zinc-500'}`}>
+                                                        <span className="font-bold">{p.name}</span>
+                                                        {sel && <Icon name="CheckCircle2" size={20} />}
+                                                    </button>
+                                                    <button onClick={() => setPlayers(players.filter(x => x.id !== p.id))} className="p-3 text-red-900/30 hover:text-red-500"><Icon name="Trash" size={18}/></button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#0a0a0c] to-transparent">
+                                <button disabled={selectedPlayers.length < 2} onClick={() => setScreen('order')} className="w-full py-5 bg-emerald-500 disabled:opacity-20 text-black rounded-2xl font-black text-xl shadow-xl">עדכן סדר וסגור</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Order Screen */}
+                    {screen === 'order' && (
+                        <div className="flex-1 flex flex-col p-6 page-enter pt-12">
+                            <div className="flex justify-between items-center mb-10">
+                                <button onClick={() => setScreen('setup')} className="p-2 text-zinc-500"><Icon name="ChevronLeft" size={28}/></button>
+                                <h2 className="text-lg font-black italic text-emerald-500 tracking-widest uppercase">Order</h2>
+                                <div className="w-10"></div>
+                            </div>
+                            <div className="flex-1 space-y-3 overflow-y-auto no-scrollbar">
+                                {selectedPlayers.map((p, i) => (
+                                    <div key={p.id} className="bg-zinc-900/40 p-5 rounded-3xl border border-white/5 flex items-center justify-between">
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-10 h-10 rounded-full bg-emerald-500 text-black flex items-center justify-center font-black italic">{i+1}</div>
+                                            <span className="text-xl font-black italic">{p.name}</span>
+                                        </div>
+                                        <div className="flex gap-1">
+                                            <button onClick={() => { if(i>0){const n=[...selectedPlayers]; [n[i],n[i-1]]=[n[i-1],n[i]]; setSelectedPlayers(n);}}} className="p-2 bg-white/5 rounded-lg text-zinc-500"><Icon name="ArrowUp" size={18}/></button>
+                                            <button onClick={() => { if(i<selectedPlayers.length-1){const n=[...selectedPlayers]; [n[i],n[i+1]]=[n[i+1],n[i]]; setSelectedPlayers(n);}}} className="p-2 bg-white/5 rounded-lg text-zinc-500"><Icon name="ArrowDown" size={18}/></button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="py-6">
+                                <button onClick={() => {
+                                    if (!currentGame) {
+                                        setGrossDebtBook({});
+                                        setCurrentGame({ players: selectedPlayers.map(p => ({ ...p, score: 0 })), activeIdx: 0, round: 1, logs: [] });
+                                    } else {
+                                        setCurrentGame(prev => ({...prev, players: selectedPlayers.map(p => ({ ...p, score: 0 })), activeIdx: 0, logs: []}));
+                                    }
+                                    setScreen('game');
+                                }} className="w-full py-5 bg-emerald-500 text-black rounded-2xl font-black text-xl shadow-xl">התחל משחקון</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Game Screen */}
+                    {screen === 'game' && (
+                        <div className="flex-1 flex flex-col bg-black page-enter">
+                            <div className="px-6 pt-12 pb-4 flex justify-between items-center bg-zinc-900/30 backdrop-blur-xl border-b border-white/5">
+                                <div className="text-right">
+                                    <div className="text-emerald-500 font-black italic text-xl uppercase tracking-tighter">FRAME {currentGame.round}</div>
+                                    <div className="text-[10px] opacity-40 font-black tracking-widest">{pointValue} {CURRENCY} / PT</div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setShowLiveDebts(true)} className="p-3 bg-white/5 rounded-xl text-zinc-400"><Icon name="Eye" size={20}/></button>
+                                    <button onClick={() => confirm("לסיים את הסדרה כולה?") && (setGrossDebtBook(getUpdatedDebts(grossDebtBook)), setScreen('summary'))} className="p-3 bg-red-500/10 rounded-xl text-red-500"><Icon name="Flag" size={20}/></button>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 flex flex-col items-center justify-center relative">
+                                <div className="score-text text-[9rem] font-black italic leading-none tabular-nums tracking-tighter">
+                                    {currentGame.players[currentGame.activeIdx].score}
+                                </div>
+                                <div className="text-3xl font-black uppercase text-emerald-500 italic tracking-[0.2em]">
+                                    {currentGame.players[currentGame.activeIdx].name}
+                                </div>
+                                {currentBreak > 0 && <div className="mt-4 bg-emerald-500 text-black px-6 py-1 rounded-full text-[10px] font-black animate-bounce uppercase">Break: {currentBreak}</div>}
+                            </div>
+
+                            <div className="bg-zinc-900/80 p-6 rounded-t-[3rem] border-t border-white/5">
+                                <div className="grid grid-cols-4 md:grid-cols-8 gap-3 mb-8 border-b border-white/5 pb-6 overflow-x-auto no-scrollbar">
+                                    {BALLS.map(b => (
+                                        <button key={b.id} onClick={() => handleScore(b.pts)} className={`${b.color} aspect-square rounded-full ball-glow active:scale-75 transition-transform flex items-center justify-center font-black text-xs text-white/20`}>{b.pts}</button>
+                                    ))}
+                                    <button onClick={() => handleScore(4, true)} className="bg-zinc-100 aspect-square rounded-full flex items-center justify-center text-red-600 font-black text-xl active:scale-75">F</button>
+                                </div>
+                                <div className="grid grid-cols-4 gap-4">
+                                    <button onClick={() => setIsMinusMode(!isMinusMode)} className={`p-5 rounded-2xl flex items-center justify-center ${isMinusMode ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-zinc-600'}`}><Icon name="Minus" size={24}/></button>
+                                    <button onClick={undoAction} className="p-5 bg-white/5 rounded-2xl flex items-center justify-center text-zinc-500"><Icon name="Undo" size={24}/></button>
+                                    <button onClick={() => { setCurrentGame(p => ({...p, activeIdx: (p.activeIdx + 1) % p.players.length})); setCurrentBreak(0); setIsMinusMode(false); }} className="col-span-2 bg-emerald-500 text-black rounded-2xl font-black text-xl shadow-lg active:scale-95 uppercase italic">Next</button>
+                                </div>
+                                <button onClick={() => confirm("לסיים משחקון?") && (setGrossDebtBook(getUpdatedDebts(grossDebtBook)), setScreen('interim'))} className="w-full mt-6 text-[10px] font-black text-zinc-700 uppercase tracking-[0.4em]">Finish Frame</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Interim Screen */}
+                    {screen === 'interim' && (
+                        <div className="flex-1 flex flex-col p-8 page-enter pt-16">
+                            <h2 className="text-4xl font-black italic tracking-tighter uppercase text-center mb-10">Frame Summary</h2>
+                            
+                            <div className="flex-1 space-y-3 overflow-y-auto no-scrollbar">
+                                {getNetDisplay(grossDebtBook).map((d, i) => (
+                                    <div key={i} className="bg-zinc-900/50 p-6 rounded-[2rem] flex justify-between items-center border border-white/5 relative overflow-hidden">
+                                        <div className="absolute right-0 top-0 bottom-0 w-2 bg-emerald-500"></div>
+                                        <div className="text-right">
+                                            <div className="text-[10px] opacity-40 font-black uppercase mb-1">{d.from} משלם ל...</div>
+                                            <div className="text-xl font-black italic">{d.to}</div>
+                                        </div>
+                                        <div className="text-3xl font-black text-emerald-500 italic tabular-nums">{d.amount}{CURRENCY}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="mt-6 space-y-3">
+                                <button onClick={() => {
+                                    setCurrentGame(p => ({...p, round: p.round + 1, players: p.players.map(x => ({...x, score: 0})), activeIdx: 0, logs: []}));
+                                    setCurrentBreak(0); setScreen('game');
+                                }} className="w-full py-5 bg-emerald-500 text-black rounded-2xl font-black text-xl shadow-xl">משחקון הבא (אותם שחקנים)</button>
+                                
+                                <button onClick={() => setScreen('modify_players')} className="w-full py-4 bg-white/5 border border-white/10 text-zinc-400 rounded-2xl font-bold flex items-center justify-center gap-2">
+                                    <Icon name="Users" size={18}/> הוסף / שנה שחקנים
+                                </button>
+                                
+                                <button onClick={() => {
+                                    setHistory([{ id: Date.now().toString(), date: new Date().toLocaleDateString('he-IL'), debts: getNetDisplay(grossDebtBook), rounds: currentGame.round }, ...history]);
+                                    setScreen('summary');
+                                }} className="w-full py-3 text-zinc-700 font-black text-xs uppercase tracking-widest">סיום סדרת משחקים</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* History & Summary screens as before... */}
+                    {screen === 'summary' && (
+                         <div className="flex-1 flex flex-col p-8 items-center justify-center text-center page-enter">
+                            <div className="w-20 h-20 bg-emerald-500 text-black rounded-3xl flex items-center justify-center shadow-2xl mb-8"><Icon name="Trophy" size={40}/></div>
+                            <h2 className="text-5xl font-black italic mb-12 tracking-tighter uppercase">Series Final</h2>
+                            <div className="w-full space-y-3 mb-12 max-h-[40vh] overflow-y-auto no-scrollbar">
+                                {getNetDisplay(grossDebtBook).map((d, i) => (
+                                    <div key={i} className="bg-zinc-900 p-6 rounded-[2rem] flex justify-between items-center border border-white/5">
+                                        <div className="text-right">
+                                            <div className="text-[10px] opacity-40 font-black mb-1">{d.from} משלם ל...</div>
+                                            <div className="text-xl font-black italic">{d.to}</div>
+                                        </div>
+                                        <div className="text-3xl font-black text-emerald-500 italic tabular-nums">{d.amount}{CURRENCY}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <button onClick={() => location.reload()} className="w-full py-6 bg-white/5 border border-emerald-500/30 text-emerald-500 rounded-2xl font-black">משחק חדש לגמרי</button>
+                        </div>
+                    )}
+
+                    {screen === 'history' && (
+                        <div className="flex-1 flex flex-col p-6 pt-12 page-enter">
+                            <div className="flex justify-between items-center mb-8">
+                                <button onClick={() => setScreen('home')} className="p-2 text-zinc-500"><Icon name="ChevronLeft" size={28}/></button>
+                                <h2 className="text-lg font-black italic text-emerald-500 tracking-widest uppercase">History</h2>
+                                <div className="w-10"></div>
+                            </div>
+                            <div className="flex-1 overflow-y-auto no-scrollbar space-y-4">
+                                {history.map(h => (
+                                    <div key={h.id} className="bg-zinc-900/40 p-6 rounded-3xl border border-white/5">
+                                        <div className="flex justify-between items-center mb-4 border-b border-white/10 pb-2">
+                                            <span className="font-black italic text-zinc-400 text-sm">{h.date}</span>
+                                            <span className="text-[10px] font-black text-emerald-500 uppercase">{h.rounds} Rounds</span>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {h.debts.map((d, i) => (
+                                                <div key={i} className="flex justify-between text-xs font-bold italic">
+                                                    <span className="text-zinc-500">{d.from} → {d.to}</span>
+                                                    <span className="text-emerald-400">{d.amount}{CURRENCY}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button onClick={() => setHistory(history.filter(x => x.id !== h.id))} className="w-full mt-4 text-[10px] text-red-500/20 uppercase font-black">מחק</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Live Debts Pop-over */}
+                    {showLiveDebts && (
+                        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-3xl p-8 flex flex-col animate-in fade-in duration-300">
+                            <div className="flex justify-between items-center mb-10 pt-10">
+                                <h3 className="text-2xl font-black italic text-emerald-500 uppercase tracking-widest">Live Pool</h3>
+                                <button onClick={() => setShowLiveDebts(false)} className="text-white p-2"><Icon name="X" size={32}/></button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto no-scrollbar space-y-3">
+                                {getNetDisplay(getUpdatedDebts(grossDebtBook)).map((d, i) => (
+                                    <div key={i} className="bg-white/5 p-6 rounded-3xl border border-white/5 flex justify-between items-center">
+                                        <div className="text-right">
+                                            <div className="text-[10px] opacity-40 font-black mb-1">{d.from} משלם ל...</div>
+                                            <div className="text-xl font-black italic">{d.to}</div>
+                                        </div>
+                                        <div className="text-3xl font-black text-emerald-400 italic tabular-nums">{d.amount}{CURRENCY}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <button onClick={() => setShowLiveDebts(false)} className="w-full py-5 bg-emerald-500 text-black rounded-2xl font-black text-lg mt-6">חזור</button>
+                        </div>
+                    )}
+
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
